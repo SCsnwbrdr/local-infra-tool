@@ -1,0 +1,81 @@
+# Azure DevOps Pipeline: Barebones Terraform init + apply
+# This pipeline performs a simple terraform init and apply against the infra directory.
+# WARNING: This applies changes automatically (-auto-approve). Use with caution.
+# Customize backend, credentials, and approval gates before using in production.
+
+# Build number format used as a simple "repo version" (YYYY.M.D-HHMMSS)
+name: $(Date:yyyy).$(Date:M).$(Date:d)-$(Date:HHmmss)
+
+trigger:
+  branches:
+    include:
+      - main
+      - master
+
+pr:
+  branches:
+    include:
+      - main
+      - master
+
+variables:
+  TF_VERSION: '1.8.4'
+  TERRAFORM_WORKING_DIR: 'infra'
+  # Set to false to skip automatic apply (e.g., run only plan)
+  AUTO_APPLY: 'true'
+  # Optional: pass additional CLI args via pipeline variable override
+  EXTRA_TF_APPLY_ARGS: ''
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  - stage: Terraform
+    displayName: Terraform Init & Apply
+    jobs:
+      - job: terraform
+        steps:
+          - checkout: self
+            clean: true
+
+          - script: |
+              echo "Build.SourceVersion: $(Build.SourceVersion)" 
+              echo "Build.BuildNumber (repo version): $(Build.BuildNumber)" 
+              echo "Using Terraform version $(TF_VERSION)"
+            displayName: Show Context
+
+          - script: |
+              set -euo pipefail
+              curl -fsSL https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip -o terraform.zip
+              unzip -o terraform.zip
+              sudo mv terraform /usr/local/bin/terraform
+              terraform -version
+            displayName: Install Terraform
+
+          - script: |
+              set -euo pipefail
+              cd "${TERRAFORM_WORKING_DIR}"
+              echo "Initializing Terraform in $(pwd)"
+              terraform init -input=false
+            displayName: Terraform Init
+
+          - script: |
+              set -euo pipefail
+              cd "${TERRAFORM_WORKING_DIR}"
+              echo "Planning Terraform (saved to tfplan)"
+              terraform plan -input=false -out=tfplan
+            displayName: Terraform Plan
+
+          - script: |
+              set -euo pipefail
+              if [ "${AUTO_APPLY}" != "true" ]; then
+                echo "AUTO_APPLY is not true; skipping apply."; exit 0; fi
+              cd "${TERRAFORM_WORKING_DIR}"
+              echo "Applying Terraform (auto-approve)"
+              terraform apply -input=false -auto-approve ${EXTRA_TF_APPLY_ARGS} tfplan
+            displayName: Terraform Apply
+
+          - publish: infra/tfplan
+            artifact: terraform-plan
+            displayName: Publish Plan Artifact (for auditing)
+            condition: always()
