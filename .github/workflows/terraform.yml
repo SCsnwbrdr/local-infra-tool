@@ -1,0 +1,78 @@
+# GitHub Actions Workflow: Barebones Terraform init + apply
+# Mirrors previous Azure DevOps pipeline behavior.
+# WARNING: Applies automatically on pushes to main/master. Adjust for production (separate plan/apply, approvals, remote backend).
+
+name: terraform-apply
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  TF_VERSION: 1.8.4
+  TERRAFORM_WORKING_DIR: infra
+  AUTO_APPLY: true
+  EXTRA_TF_APPLY_ARGS: ''
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # for future workload identity auth if needed
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show Context
+        run: |
+          echo "GITHUB_SHA: $GITHUB_SHA"
+          echo "Run Number: $GITHUB_RUN_NUMBER"
+          echo "Run Attempt: $GITHUB_RUN_ATTEMPT"
+          echo "Repo Version (derived): $(date +%Y).$(date +%m | sed 's/^0*//').$(date +%d | sed 's/^0*//')-$GITHUB_RUN_NUMBER"
+          echo "Terraform Version: $TF_VERSION"
+
+      - name: Setup Terraform
+        id: tfsetup
+        run: |
+          set -euo pipefail
+          curl -fsSL https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip -o terraform.zip
+          unzip -o terraform.zip
+          sudo mv terraform /usr/local/bin/terraform
+          terraform -version
+
+      - name: Terraform Init
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
+        run: |
+          set -euo pipefail
+          terraform init -input=false
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
+        run: |
+          set -euo pipefail
+          terraform plan -input=false -out=tfplan
+
+      - name: Upload Plan Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TERRAFORM_WORKING_DIR }}/tfplan
+
+      - name: Terraform Apply
+        if: ${{ env.AUTO_APPLY == 'true' && github.event_name == 'push' }}
+        working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
+        run: |
+          set -euo pipefail
+          terraform apply -input=false -auto-approve $EXTRA_TF_APPLY_ARGS tfplan
+
+      - name: Skip Apply (PR or AUTO_APPLY != true)
+        if: ${{ !(env.AUTO_APPLY == 'true' && github.event_name == 'push') }}
+        run: echo "Skipping apply (either PR or AUTO_APPLY not true)."
