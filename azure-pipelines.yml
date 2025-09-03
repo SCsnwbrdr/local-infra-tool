@@ -75,7 +75,3 @@ stages:
               terraform apply -input=false -auto-approve ${EXTRA_TF_APPLY_ARGS} tfplan
             displayName: Terraform Apply
 
-          - publish: infra/tfplan
-            artifact: terraform-plan
-            displayName: Publish Plan Artifact (for auditing)
-            condition: always()
