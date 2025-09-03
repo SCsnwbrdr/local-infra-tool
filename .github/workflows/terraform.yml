@@ -18,7 +18,7 @@ env:
   # When set (non-empty), skip terraform plan and instead download & use an Azure Artifacts universal package.
   # Provide the package name via ARTIFACT_OVERRIDE and version via ARTIFACT_VERSION.
   ARTIFACT_OVERRIDE: 'my-first-package'
-  ARTIFACT_VERSION: '2025.9.1-204047' # Required if ARTIFACT_OVERRIDE is set
+  ARTIFACT_VERSION: '2025.9.3-test' # Required if ARTIFACT_OVERRIDE is set
   ARTIFACT_FEED: terraform-temporary-plans
   ARTIFACT_ORG: https://dev.azure.com/jonathanlittleton0381/
 
