@@ -15,6 +15,12 @@ env:
   TERRAFORM_WORKING_DIR: infra
   AUTO_APPLY: true
   EXTRA_TF_APPLY_ARGS: ''
+  # When set (non-empty), skip terraform plan and instead download & use an Azure Artifacts universal package.
+  # Provide the package name via ARTIFACT_OVERRIDE and version via ARTIFACT_VERSION.
+  ARTIFACT_OVERRIDE: 'true'
+  ARTIFACT_VERSION: '2025.9.1-204047' # Required if ARTIFACT_OVERRIDE is set
+  ARTIFACT_FEED: terraform-temporary-plans
+  ARTIFACT_ORG: https://dev.azure.com/jonathanlittleton0381/
 
 jobs:
   terraform:
@@ -46,6 +52,44 @@ jobs:
           sudo mv terraform /usr/local/bin/terraform
           terraform -version
 
+      - name: (Optional) Download Override Artifact
+        if: ${{ env.ARTIFACT_OVERRIDE != '' }}
+        env:
+          AZURE_DEVOPS_EXT_PAT: ${{ secrets.AZURE_DEVOPS_EXT_PAT }}
+        run: |
+          set -euo pipefail
+          echo "Artifact override enabled: $ARTIFACT_OVERRIDE (version: $ARTIFACT_VERSION)"
+          if [ -z "$AZURE_DEVOPS_EXT_PAT" ]; then
+            echo "ERROR: AZURE_DEVOPS_EXT_PAT secret not provided." >&2
+            exit 1
+          fi
+          if [ -z "$ARTIFACT_VERSION" ]; then
+            echo "ERROR: ARTIFACT_VERSION must be set when ARTIFACT_OVERRIDE is used." >&2
+            exit 1
+          fi
+          echo "Installing Azure DevOps CLI extension..."
+          az extension add --name azure-devops >/dev/null 2>&1 || az extension update --name azure-devops >/dev/null 2>&1 || true
+          echo "Downloading universal package..."
+          az artifacts universal download \
+            --organization "${{ secrets.ARTIFACT_ORG }}" \
+            --feed "$ARTIFACT_FEED" \
+            --name "$ARTIFACT_OVERRIDE" \
+            --version "$ARTIFACT_VERSION" \
+            --path artifact-download
+          ls -R artifact-download || true
+          mkdir -p "$TERRAFORM_WORKING_DIR"
+          echo "Clearing existing infra folder contents..."
+          rm -rf ${TERRAFORM_WORKING_DIR:?}/*
+          shopt -s dotglob || true
+          if [ -d artifact-download/infra ]; then
+            echo "Moving contents of artifact-download/infra into $TERRAFORM_WORKING_DIR"
+            mv artifact-download/infra/* "$TERRAFORM_WORKING_DIR"/
+          else
+            echo "Moving root artifact contents into $TERRAFORM_WORKING_DIR"
+            mv artifact-download/* "$TERRAFORM_WORKING_DIR"/
+          fi
+          echo "Final infra directory tree:"; find "$TERRAFORM_WORKING_DIR" -maxdepth 4 -print
+
       - name: Terraform Init
         working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
         run: |
@@ -59,19 +103,13 @@ jobs:
           set -euo pipefail
           terraform plan -input=false -out=tfplan
 
-      - name: Upload Plan Artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan
-          path: ${{ env.TERRAFORM_WORKING_DIR }}/tfplan
 
       - name: Terraform Apply
-        if: ${{ env.AUTO_APPLY == 'true' && github.event_name == 'push' }}
+        if: ${{ env.AUTO_APPLY == 'true' && github.event_name == 'push' && env.ARTIFACT_OVERRIDE == ''}}
         working-directory: ${{ env.TERRAFORM_WORKING_DIR }}
         run: |
           set -euo pipefail
-          terraform apply -input=false -auto-approve $EXTRA_TF_APPLY_ARGS tfplan
+          terraform apply -input=false -auto-approve $EXTRA_TF_APPLY_ARGS tfplan || exit 1
 
       - name: Skip Apply (PR or AUTO_APPLY != true)
         if: ${{ !(env.AUTO_APPLY == 'true' && github.event_name == 'push') }}
